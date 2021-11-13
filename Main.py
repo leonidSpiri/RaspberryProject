@@ -91,7 +91,7 @@ def GetTempInside():
             temp_string = lines[1][equals_pos+2:]
             temp = float(temp_string) / 1000.0
             db.child("home").child("TempInsideBox").set(temp)
-    time.sleep(5*60)   
+        time.sleep(5*60)   
 
 def sensorWork(sensorPin: int, relayPinFan:int, roomStr:str):
     previous = 50
