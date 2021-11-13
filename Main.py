@@ -9,6 +9,15 @@ from psycopg2 import sql
 import requests as requests
 import pyrebase
 import threading
+import os
+import glob
+
+os.system('modprobe w1-gpio')
+os.system('modprobe w1-therm')
+ 
+base_dir = '/sys/bus/w1/devices/'
+device_folder = glob.glob(base_dir + '28*')[0]
+device_file = device_folder + '/w1_slave'
 
 GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
@@ -69,6 +78,21 @@ def convertTemp(value):
 def convertHum(value):
     return str("{0:0.2f}".format(value))
 
+def GetTempInside():
+    while True:
+        f = open(device_file, 'r')
+        lines = f.readlines()
+        f.close()
+        while lines[0].strip()[-3:] != 'YES':
+            time.sleep(0.2)
+            lines = read_temp_raw()
+        equals_pos = lines[1].find('t=')
+        if equals_pos != -1:
+            temp_string = lines[1][equals_pos+2:]
+            temp = float(temp_string) / 1000.0
+            db.child("home").child("TempInsideBox").set(temp)
+    time.sleep(5*60)   
+
 def sensorWork(sensorPin: int, relayPinFan:int, roomStr:str):
     previous = 50
     try:
@@ -106,9 +130,9 @@ def sensorWork(sensorPin: int, relayPinFan:int, roomStr:str):
                 if abs(humidity - previous) > 2:
                     timeout = 3*60
                 if abs(humidity - previous) < 0.4:
-                    timeout = 30*60
+                    timeout = 10*60
                 else:
-                    timeout = 15*60
+                    timeout = 5*60
             previous = humidity
             time.sleep(timeout)
     except KeyboardInterrupt:
@@ -119,7 +143,7 @@ def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
     while True:
         if GPIO.input(key) == False:
-            time.sleep(0.3)
+            time.sleep(0.2)
             if isTurnOn == False:
                 GPIO.output(relayPinFan, GPIO.HIGH)
                 GPIO.output(relayPinLight, GPIO.HIGH)
@@ -130,13 +154,13 @@ def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
                 GPIO.output(relayPinLight, GPIO.LOW)
                 isTurnOn = False
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
-        time.sleep(0.3)
+        time.sleep(0.2)
 
 def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
     while True:
         isLightOn = db.child("home").child("rooms").child(roomStr).child("isLightOn").get().val()
-        if isLightOn == True and  isTurnOn == False:
+        if isLightOn == True and isTurnOn == False:
             isTurnOn = True
             GPIO.output(relayPinLight, GPIO.HIGH)
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
@@ -145,17 +169,19 @@ def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
             GPIO.output(relayPinLight, GPIO.LOW)
             isTurnOn = False
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
-        time.sleep(30)     
+        time.sleep(15)     
 
 one = threading.Thread(target=sensorWork, args=(GuestBathSensorPin, GuestBathRelayFanPin, GuestBathStr))
 oneFanLight = threading.Thread(target=FanLightRelayWork, args=(GuestBathRelayFanPin, GuestBathRelayLightPin, GuestBathKey, GuestBathStr))
 oneLight = threading.Thread(target=LightRelayWork, args=(GuestBathRelayLightPin, GuestBathKey, GuestBathStr))
+tempInside = threading.Thread(target=GetTempInside)
 #two = threading.Thread(target=sensorWork, args=(livingRoomSensorPin, livingRoomRelayFanPin, livingRoomStr))
 
 if __name__ == '__main__':
     one.start()
     oneFanLight.start()
     oneLight.start()
+    tempInside.start()
     time.sleep(4199999)
 
 
