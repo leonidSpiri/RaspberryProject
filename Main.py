@@ -32,11 +32,11 @@ config = {
 }
 
 url = "http://www.google.com"
-timeout = 5
+urlTimeout = 5
 isConnected = False
 while isConnected == False:
     try:
-        request = requests.get(url, timeout=timeout)
+        request = requests.get(url, timeout=urlTimeout)
         isConnected = True
     except (requests.ConnectionError, requests.Timeout) as exception:
         print("No internet connection.")
@@ -46,23 +46,26 @@ MainLedPin = 25
 MainFan = 15
 SENSOR = Adafruit_DHT.AM2302
 
+transistor = 14
 livingRoomSensorPin = 4
 #livingRoomRelayFanPin = 1
-livingRoomRelayLightPin = 14
-livingRoomKey = 18
+#livingRoomRelayLightPin = 14
+#livingRoomKey = 18
 livingRoomStr = "Гостиная"
 
-GuestBathSensorPin = 22
-GuestBathRelayLightPin = 23
-GuestBathRelayFanPin = 24
-GuestBathKey = 27
-GuestBathStr = "Гостевая ванная"
+#BalconSensorPin = 27
+#BalconStr = "Мезонин"
 
-GPIO.setup(livingRoomKey, GPIO.IN)
+
+GuestBathSensorPin = 4
+GuestBathRelayLightPin = 22
+GuestBathRelayFanPin = 27
+GuestBathKey = 23
+GuestBathStr = "Гостевой туалет"
+
+#GPIO.setup(livingRoomKey, GPIO.IN)
 #GPIO.setup(livingRoomRelayFanPin, GPIO.OUT)
 #GPIO.output(livingRoomRelayFanPin, GPIO.LOW)
-GPIO.setup(livingRoomRelayLightPin, GPIO.OUT)
-GPIO.output(livingRoomRelayLightPin, GPIO.LOW)
 
 GPIO.setup(GuestBathKey, GPIO.IN)
 GPIO.setup(GuestBathRelayFanPin, GPIO.OUT)
@@ -71,10 +74,12 @@ GPIO.setup(GuestBathRelayLightPin, GPIO.OUT)
 GPIO.output(GuestBathRelayLightPin, GPIO.LOW)
 
 
-GPIO.setup(MainLedPin, GPIO.OUT)
-GPIO.output(MainLedPin, GPIO.LOW)
+#GPIO.setup(MainLedPin, GPIO.OUT)
+#GPIO.output(MainLedPin, GPIO.LOW)
 GPIO.setup(MainFan, GPIO.OUT)
-GPIO.output(MainFan, GPIO.LOW)
+#GPIO.output(MainFan, GPIO.LOW)
+GPIO.setup(transistor, GPIO.OUT)
+GPIO.output(transistor, GPIO.HIGH)
 
 array = [[livingRoomStr, False], [GuestBathStr, False]]
 
@@ -85,10 +90,7 @@ conn = psycopg2.connect(dbname='d8uq0o35eq55kl', user='zftenjusikiyjk',
                         password='7369c86979b2cbf92b10879ec08ba1ca99394ea761c0462a4baf24d3a2225685', host='ec2-176-34-168-83.eu-west-1.compute.amazonaws.com')
 
 
-def convertTemp(value):
-    return str("{0:0.1f}".format(value))
-
-def convertHum(value):
+def convertValue(value):
     return str("{0:0.2f}".format(value))
 
 def GetTempInside():
@@ -111,87 +113,110 @@ def GetTempInside():
 
 def MainFanWork():
     while True:
-        print("I'm work")
         isWork = False
         for i in range(0,2):
             if array[i][1] == True:
                 isWork = True
                 break
         GPIO.output(MainFan, isWork)
-        time.sleep(1*60)
-        
+        db.child("home").child("IsMainFanWork").set(isWork)
+        time.sleep(1*30)
+
 
 def sensorFanWork(sensorPin: int, relayPinFan:int, roomStr:str):
     previous = 50
     timeout = 60
-    try:
-        while True:
-            humidity, temperature = Adafruit_DHT.read_retry(SENSOR, sensorPin)
-            date = str(datetime.datetime.now())
-            print("\nsensor = " + roomStr + " humidity = " + str(humidity))
-            if humidity is not None and temperature is not None:
-                # Write data to SQL Database
-                GPIO.output(MainLedPin, GPIO.HIGH)
-                time.sleep(3)
-                GPIO.output(MainLedPin, GPIO.LOW)
-                cursor = conn.cursor()
-                with conn.cursor() as cursor:
-                    conn.autocommit = True
-                    values = [
-                        (date, convertTemp(temperature), convertHum(humidity), sensorPin)
+    countTimesWork = 0
+    while True:
+        humidity, temperature = Adafruit_DHT.read_retry(SENSOR, sensorPin)
+        date = str(datetime.datetime.now())
+        print("\nsensor = " + roomStr + " humidity = " + str(humidity))
+        if humidity is not None and temperature is not None:
+            # Write data to SQL Database
+            GPIO.output(MainLedPin, GPIO.HIGH)
+            time.sleep(3)
+            GPIO.output(MainLedPin, GPIO.LOW)
+            cursor = conn.cursor()
+            with conn.cursor() as cursor:
+                conn.autocommit = True
+                values = [
+                        (date, convertValue(temperature), convertValue(humidity), sensorPin)
                     ]
-                    insert = sql.SQL('INSERT INTO home (date, temperature, humidity, sensor) VALUES {}').format(
-                        sql.SQL(',').join(map(sql.Literal, values))
+                insert = sql.SQL('INSERT INTO home (date, temperature, humidity, sensor) VALUES {}').format(
+                      sql.SQL(',').join(map(sql.Literal, values))
                     )
-                    cursor.execute(insert)
-                    
-                # Check and write data to Firebase datebase
-                isFanWorkRoot = db.child("home").child("rooms").child(roomStr).child("isFanWorkRoot").get().val()
-                whenTurnOnFan = db.child("home").child("rooms").child(roomStr).child("whenTurnOnFan").get().val()
-                
-                isIWork = False
-                if humidity > whenTurnOnFan or isFanWorkRoot:
-                    isIWork = True
-                else:
+                cursor.execute(insert)
+
+               # Check and write data to Firebase datebase
+            isFanWorkRoot = db.child("home").child("rooms").child(roomStr).child("isFanWorkRoot").get().val()
+            whenTurnOnFan = db.child("home").child("rooms").child(roomStr).child("whenTurnOnFan").get().val()
+
+            isIWork = False
+            if humidity > whenTurnOnFan:
+                isIWork = True
+                if countTimesWork > 2:
                     isIWork = False
-                # Turn on/off the relay 
-                GPIO.output(relayPinFan, isIWork)
-                db.child("home").child("rooms").child(roomStr).child("isFanWork").set(isIWork)
-                
-                index = 0
-                for i in range(0, 2):
-                    try:
-                        index = array[i].index(roomStr)
-                        array[index][1] = isIWork
-                        break
-                    except:
-                        continue
+                    countTimesWork = 0
+                else:
+                    countTimesWork+=1
+            else:
+                isIWork = False
+                # Turn on/off the relay
+            GPIO.output(relayPinFan, isIWork)
+            db.child("home").child("rooms").child(roomStr).child("isFanWork").set(isIWork)
+
+            index = 0
+            for i in range(0, 2):
+                try:
+                    index = array[i].index(roomStr)
+                    array[index][1] = isIWork
+                    break
+                except:
+                    continue
 
             # define timeout
-                if abs(humidity - previous) > 5:
-                    timeout = 60
+            if abs(humidity - previous) > 5:
+                timeout = 1*60
+            else:
+                if abs(humidity - previous) > 2:
+                timeout = 1*60
+            else:
+                if abs(humidity - previous) > 2:
+                    timeout = 2*60
+                if abs(humidity - previous) < 0.4:
+                    timeout = 5*60
                 else:
-                    if abs(humidity - previous) > 2:
-                        timeout = 3*60
-                    if abs(humidity - previous) < 0.4:
-                        timeout = 10*60
-                    else:
-                        timeout = 5*60
-                previous = humidity
-            time.sleep(timeout)
-    except:
-        GPIO.cleanup()
-        os.system('sudo restart')
+                    timeout = 3*60
+            previous = humidity
+        else:
+            GPIO.output(relayPinFan, False)
+            timeout = 60
+            db.child("home").child("rooms").child(roomStr).child("isFanWork").set(False)
+            GPIO.output(transistor, GPIO.LOW)
+            time.sleep(10)
+            GPIO.output(transistor, GPIO.HIGH)
+            f = open("home/pi/Documents/ErrorLog.txt", "a")
+            f.write("FUUUUCKKK, but great: room = " + str(roomStr) +" date = "+ str(date)+"\n")
+            f.close()
+        db.child("home").child("rooms").child(roomStr).child("status").set(str(date) + " humidity = " + str(humidity) + " temp = " + str(temperature))
+        time.sleep(timeout)
+
 
 
 def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
+    timer = 0
     while True:
         if GPIO.input(key) == False:
-            time.sleep(0.3)
             if isTurnOn == False:
-                GPIO.output(relayPinFan, GPIO.HIGH)
                 GPIO.output(relayPinLight, GPIO.HIGH)
+                time.sleep(1)
+                isTurnOn = True
+                timer = 0
+            else:
+                GPIO.output(relayPinLight, GPIO.LOW)
+                GPIO.output(relayPinFan, GPIO.HIGH)
+                isTurnOn = False
                 db.child("home").child("rooms").child(roomStr).child("isFanWork").set(True)
                 index = 0
                 for i in range(0, 2):
@@ -201,26 +226,28 @@ def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
                         break
                     except:
                         continue
-                isTurnOn = True
-                
-            else:
-                GPIO.output(relayPinLight, GPIO.LOW)
-                isTurnOn = False
-            GPIO.output(MainLedPin, GPIO.HIGH)
+            #GPIO.output(MainLedPin, GPIO.HIGH)
             time.sleep(1)
-            GPIO.output(MainLedPin, GPIO.LOW)
+            #GPIO.output(MainLedPin, GPIO.LOW)
+            timer = -5*600
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
-        time.sleep(0.15)
+        timer += 1
+        if timer > 5*600:
+            GPIO.output(relayPinLight, GPIO.LOW)
+            isTurnOn = False
+            db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
+            timer = -5*600
+        time.sleep(0.3)
 
 def KeyLightRelayWork(relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
     while True:
         if GPIO.input(key) == False:
-            time.sleep(0.3)
+            time.sleep(0.2)
             if isTurnOn == False:
                 GPIO.output(relayPinLight, GPIO.HIGH)
                 isTurnOn = True
-                
+
             else:
                 GPIO.output(relayPinLight, GPIO.LOW)
                 isTurnOn = False
@@ -228,7 +255,7 @@ def KeyLightRelayWork(relayPinLight:int, key:int, roomStr:str):
             time.sleep(1)
             GPIO.output(MainLedPin, GPIO.LOW)
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
-        time.sleep(0.15)
+        time.sleep(0.1)
 
 def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
@@ -241,7 +268,7 @@ def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
             GPIO.output(MainLedPin, GPIO.HIGH)
             time.sleep(1)
             GPIO.output(MainLedPin, GPIO.LOW)
-            
+
         if isLightOn == False and  isTurnOn == True:
             GPIO.output(relayPinLight, GPIO.LOW)
             isTurnOn = False
@@ -249,49 +276,46 @@ def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
             GPIO.output(MainLedPin, GPIO.HIGH)
             time.sleep(1)
             GPIO.output(MainLedPin, GPIO.LOW)
-        time.sleep(15)     
+        time.sleep(15)
 
 
 def sensorWork(sensorPin: int, roomStr:str):
     previous = 50
+    print(sensorPin)
     timeout = 60
-    try:
-        while True:
-            humidity, temperature = Adafruit_DHT.read_retry(SENSOR, sensorPin)
-            date = str(datetime.datetime.now())
-            print("\nsensor = " + roomStr + " humidity = " + str(humidity))
-            if humidity is not None and temperature is not None:
+    print(roomStr)
+    while True:
+        humidity, temperature = Adafruit_DHT.read_retry(SENSOR, sensorPin)
+        print(humidity)
+        date = str(datetime.datetime.now())
+        if humidity is not None and temperature is not None:
                 # Write data to SQL Database
-                GPIO.output(MainLedPin, GPIO.HIGH)
-                time.sleep(3)
-                GPIO.output(MainLedPin, GPIO.LOW)
-                cursor = conn.cursor()
-                with conn.cursor() as cursor:
-                    conn.autocommit = True
-                    values = [
-                        (date, convertTemp(temperature), convertHum(humidity), sensorPin)
+                #GPIO.output(MainLedPin, GPIO.HIGH)
+                #time.sleep(3)
+               # GPIO.output(MainLedPin, GPIO.LOW)
+            cursor = conn.cursor()
+            with conn.cursor() as cursor:
+                conn.autocommit = True
+                values = [
+                        (date, convertValue(temperature), convertValue(humidity), sensorPin)
                     ]
-                    insert = sql.SQL('INSERT INTO home (date, temperature, humidity, sensor) VALUES {}').format(
+                insert = sql.SQL('INSERT INTO home (date, temperature, humidity, sensor) VALUES {}').format(
                         sql.SQL(',').join(map(sql.Literal, values))
                     )
-                    cursor.execute(insert)
-                    
-            # define timeout
-                if abs(humidity - previous) > 5:
-                    timeout = 60
-                else:
-                    if abs(humidity - previous) > 2:
-                        timeout = 3*60
-                    if abs(humidity - previous) < 0.4:
-                        timeout = 10*60
-                    else:
-                        timeout = 5*60
-                previous = humidity
-            time.sleep(timeout)
-    except:
-        GPIO.cleanup()
-        os.system('sudo restart')
+                cursor.execute(insert)
 
+            # define timeout
+            if abs(humidity - previous) > 5:
+                timeout = 60
+            else:
+                if abs(humidity - previous) > 2:
+                    timeout = 3*60
+                if abs(humidity - previous) < 0.4:
+                    timeout = 10*60
+                else:
+                    timeout = 5*60
+            previous = humidity
+        time.sleep(timeout)
 
 
 
@@ -300,25 +324,41 @@ one = threading.Thread(target=sensorFanWork, args=(GuestBathSensorPin, GuestBath
 oneFanLight = threading.Thread(target=FanLightRelayWork, args=(GuestBathRelayFanPin, GuestBathRelayLightPin, GuestBathKey, GuestBathStr))
 oneLight = threading.Thread(target=LightRelayWork, args=(GuestBathRelayLightPin, GuestBathKey, GuestBathStr))
 #tempInside = threading.Thread(target=GetTempInside)
-two = threading.Thread(target=sensorWork, args=(livingRoomSensorPin, livingRoomStr))
-twoKeyLight = threading.Thread(target=KeyLightRelayWork, args=(livingRoomRelayLightPin, livingRoomKey, livingRoomStr))
-twoLight = threading.Thread(target=LightRelayWork, args=(livingRoomRelayLightPin, livingRoomKey, livingRoomStr))
+#two = threading.Thread(target=sensorWork, args=(livingRoomSensorPin, livingRoomStr))
+#twoKeyLight = threading.Thread(target=KeyLightRelayWork, args=(livingRoomRelayLightPin, livingRoomKey, livingRoomStr))
+#twoLight = threading.Thread(target=LightRelayWork, args=(livingRoomRelayLightPin, livingRoomKey, livingRoomStr))
+#third = threading.Thread(target=sensorWork, args=(BalconSensorPin, BalconStr))
+
 
 if __name__ == '__main__':
     with conn.cursor() as cursor:
         conn.autocommit = True
         insert = sql.SQL("DELETE FROM home WHERE date < CURRENT_TIMESTAMP - INTERVAL '2day'")
         cursor.execute(insert)
-    try:
-        one.start()
-        oneFanLight.start()
-        oneLight.start()
+    one.start()
+    oneFanLight.start()
+    oneLight.start()
 
-        two.start()
-        twoKeyLight.start()
-        twoLight.start()
-        #tempInside.start()
-        FanMainWork.start()
-        time.sleep(4199999)
-    except KeyboardInterrupt:
-        GPIO.cleanup()
+    #two.start()
+    #third.start()
+    #twoKeyLight.start()
+    #twoLight.start()
+#third = threading.Thread(target=sensorWork, args=(BalconSensorPin, BalconStr))
+
+
+if __name__ == '__main__':
+    with conn.cursor() as cursor:
+        conn.autocommit = True
+        insert = sql.SQL("DELETE FROM home WHERE date < CURRENT_TIMESTAMP - INTERVAL '2day'")
+        cursor.execute(insert)
+    one.start()
+    oneFanLight.start()
+    oneLight.start()
+
+    #two.start()
+    #third.start()
+    #twoKeyLight.start()
+    #twoLight.start()
+    #tempInside.start()
+    #FanMainWork.start()
+    time.sleep(4199999)
