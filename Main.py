@@ -92,6 +92,7 @@ db = firebase.database()
 def convertValue(value):
     return str("{0:0.2f}".format(value))
 
+#Отправка в Firebase температуры внутри распредКоробки
 def GetTempInside():
     while True:
         f = open(device_file, 'r')
@@ -110,21 +111,23 @@ def GetTempInside():
        # GPIO.output(MainLedPin, GPIO.LOW)
         time.sleep(5*60)
 
+
 def SendStatusErrorHandler():
     counter = 0
     while True:
+        date = str(datetime.datetime.now())
         try:
             request = requests.get(url, timeout=urlTimeout)
             db.child("home").child("Status").set("Maybe online = " + str(counter))
             counter+=1
         except:
             f = open("home/pi/Documents/ErrorLog.txt", "a")
-            date = str(datetime.datetime.now())
             f.write("FUUUUCKKK, but great: date = "+ date+"\n")
             f.close()
             os.system("shutdown -r now")            
-        time.sleep(10)
+        time.sleep(60)
 
+#Включение главного канального вентилятора
 def MainFanWork():
     while True:
         isWork = False
@@ -136,6 +139,7 @@ def MainFanWork():
         db.child("home").child("IsMainFanWork").set(isWork)
         time.sleep(1*60)
 
+#Oтправка в БД показания данных с датчиков
 def sendDataToDatabase():
     while True:
         isConnected = False
@@ -167,6 +171,8 @@ def sendDataToDatabase():
                 print("No internet connection.")
         time.sleep(5*60)
 
+
+#Управление вентиляцией
 def sensorFanWork(sensorPin: int, relayPinFan:int, roomStr:str):
     previous = 50
     timeout = 60
@@ -230,7 +236,7 @@ def sensorFanWork(sensorPin: int, relayPinFan:int, roomStr:str):
         time.sleep(timeout)
 
 
-
+#включение света и вентиляции по нажатию кнопки
 def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
     timer = 0
@@ -267,6 +273,7 @@ def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
             timer = -5*600
         time.sleep(0.3)
 
+#Включение по нажатию кнопки только света
 def KeyLightRelayWork(relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
     while True:
@@ -285,6 +292,7 @@ def KeyLightRelayWork(relayPinLight:int, key:int, roomStr:str):
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
         time.sleep(0.1)
 
+#Включение света по состоянию Firebase
 def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
     isTurnOn = False
     while True:
