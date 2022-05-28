@@ -11,6 +11,7 @@ import pyrebase
 import threading
 import os
 import glob
+from adafruit_servokit import ServoKit
 
 #os.system('modprobe w1-gpio')
 #os.system('modprobe w1-therm')
@@ -61,6 +62,9 @@ GuestBathRelayFanPin = 27
 GuestBathKey = 23
 GuestBathStr = "Гостевой туалет"
 
+BalconSensorPin = 24
+BalconStr = "Мезонин"
+
 #GPIO.setup(livingRoomKey, GPIO.IN)
 #GPIO.setup(livingRoomRelayFanPin, GPIO.OUT)
 #GPIO.output(livingRoomRelayFanPin, GPIO.LOW)
@@ -74,6 +78,8 @@ GPIO.setup(GuestBathRelayLightPin, GPIO.OUT)
 GPIO.output(GuestBathRelayLightPin, GPIO.LOW)
 
 
+
+
 #GPIO.setup(MainLedPin, GPIO.OUT)
 #GPIO.output(MainLedPin, GPIO.LOW)
 #GPIO.setup(MainFan, GPIO.OUT)
@@ -81,7 +87,9 @@ GPIO.output(GuestBathRelayLightPin, GPIO.LOW)
 GPIO.setup(transistor, GPIO.OUT)
 GPIO.output(transistor, GPIO.HIGH)
 
-array = [[GuestBathStr, False]]
+array = [[GuestBathStr, False], [BalconStr, False]]
+kit = ServoKit(channels=16)
+kit.servo[1].angle = 180
 
 
 firebase = pyrebase.initialize_app(config)
@@ -124,7 +132,7 @@ def SendStatusErrorHandler():
             f = open("home/pi/Documents/ErrorLog.txt", "a")
             f.write("FUUUUCKKK, but great: date = "+ date+"\n")
             f.close()
-            os.system("shutdown -r now")            
+            os.system("shutdown -r now")
         time.sleep(60)
 
 #Включение главного канального вентилятора
@@ -140,11 +148,9 @@ def MainFanWork():
         time.sleep(1*60)
 
 #Oтправка в БД показания данных с датчиков
-def sendDataToDatabase():
+def sendDataToDatabase(sensorPin: int, roomStr:str):
     while True:
         isConnected = False
-        sensorPin = GuestBathSensorPin
-        roomStr = GuestBathStr
         while isConnected == False:
             try:
                 request = requests.get(url, timeout=urlTimeout)
@@ -172,13 +178,13 @@ def sendDataToDatabase():
         time.sleep(5*60)
 
 
-#Управление вентиляцией
+#Turn on off vent depend on the sensor
 def sensorFanWork(sensorPin: int, relayPinFan:int, roomStr:str):
     previous = 50
     timeout = 60
     countTimesWork = 0
     while True:
-        GPIO.output(relayPinFan, False)
+        #GPIO.output(relayPinFan, False)
         db.child("home").child("rooms").child(roomStr).child("isFanWork").set(False)
         humidity, temperature = Adafruit_DHT.read_retry(SENSOR, sensorPin)
         date = str(datetime.datetime.now())
@@ -199,7 +205,7 @@ def sensorFanWork(sensorPin: int, relayPinFan:int, roomStr:str):
                     countTimesWork+=1
             else:
                 isIWork = False
-                
+
             if isFanWorkRoot == True:
                 isIWork = False
                 # Turn on/off the relay
@@ -228,12 +234,75 @@ def sensorFanWork(sensorPin: int, relayPinFan:int, roomStr:str):
             previous = humidity
         else:
             GPIO.output(relayPinFan, False)
-            timeout = 60
+            timeout = 10
             db.child("home").child("rooms").child(roomStr).child("isFanWork").set(False)
             GPIO.output(transistor, GPIO.LOW)
             time.sleep(10)
             GPIO.output(transistor, GPIO.HIGH)
         time.sleep(timeout)
+
+
+
+#Open Close servo depend on the sensor
+def sensorServoWork(sensorPin: int, servoPin:int, roomStr:str):
+    previous = 50
+    prevOpenServo = False
+    timeout = 60
+    countTimesWork = 0
+    while True:
+        humidity, temperature = Adafruit_DHT.read_retry(SENSOR, sensorPin)
+        date = str(datetime.datetime.now())
+        print("\nSERVO sensor = " + roomStr + " humidity = " + str(humidity))
+        if humidity is not None and temperature is not None:
+               # Check and write data to Firebase datebase
+            isServoOpenRoot = db.child("home").child("rooms").child(roomStr).child("isFanWorkRoot").get().val()
+            whenOpenServo = db.child("home").child("rooms").child(roomStr).child("whenTurnOnFan").get().val()
+
+            isIWork = False
+            if humidity > whenOpenServo:
+                isIWork = True
+            if isServoOpenRoot == True:
+                isIWork = True
+                
+                # Turn on/off the servo
+            if (isIWork == False and prevOpenServo == True):
+                for i in range (65, 180):
+                    kit.servo[servoPin].angle = i
+                    time.sleep(0.01)
+            if (isIWork == True and prevOpenServo == False):
+                for i in range (180, 65, -1):
+                    kit.servo[servoPin].angle = i
+                    time.sleep(0.01)
+
+            prevOpenServo = isIWork
+            db.child("home").child("rooms").child(roomStr).child("isFanWork").set(isIWork)
+
+            index = 0
+            for i in range(0, 2):
+                try:
+                    index = array[i].index(roomStr)
+                    array[index][1] = isIWork
+                    break
+                except:
+                    continue
+
+            # define timeout
+            if abs(humidity - previous) > 5:
+                timeout = 1*60
+            else:
+                if abs(humidity - previous) > 2:
+                    timeout = 2*60
+                if abs(humidity - previous) < 0.4:
+                    timeout = 5*60
+                else:
+                    timeout = 3*60
+            previous = humidity
+        else:
+            timeout = 10
+            GPIO.output(transistor, GPIO.LOW)
+            time.sleep(10)
+            GPIO.output(transistor, GPIO.HIGH)
+        time.sleep(timeout)        
 
 
 #включение света и вентиляции по нажатию кнопки
@@ -271,7 +340,7 @@ def FanLightRelayWork(relayPinFan:int, relayPinLight:int, key:int, roomStr:str):
             isTurnOn = False
             db.child("home").child("rooms").child(roomStr).child("isLightOn").set(isTurnOn)
             timer = -5*600
-        time.sleep(0.3)
+        time.sleep(0.2)
 
 #Включение по нажатию кнопки только света
 def KeyLightRelayWork(relayPinLight:int, key:int, roomStr:str):
@@ -312,19 +381,22 @@ def LightRelayWork(relayPinLight:int, key:int, roomStr:str):
             #GPIO.output(MainLedPin, GPIO.HIGH)
             #time.sleep(1)
             #GPIO.output(MainLedPin, GPIO.LOW)
-        time.sleep(15)
+        time.sleep(3)
 
 
 
 ErrorHandler = threading.Thread(target=SendStatusErrorHandler)
-SendDataToDB = threading.Thread(target=sendDataToDatabase)
+#SendDataToDB = threading.Thread(target=sendDataToDatabase)
 FanMainWork = threading.Thread(target=MainFanWork)
-#tempInside = threading.Thread(target=GetTempInside)
+#tempInside = threading.Thread(target=GetTempInside)   sendDataToDatabase
 
 one = threading.Thread(target=sensorFanWork, args=(GuestBathSensorPin, GuestBathRelayFanPin, GuestBathStr))
 oneFanLight = threading.Thread(target=FanLightRelayWork, args=(GuestBathRelayFanPin, GuestBathRelayLightPin, GuestBathKey, GuestBathStr))
 oneLight = threading.Thread(target=LightRelayWork, args=(GuestBathRelayLightPin, GuestBathKey, GuestBathStr))
+one_sendSensorData = threading.Thread(target=sendDataToDatabase, args=(GuestBathSensorPin, GuestBathStr))
+twoServo = threading.Thread(target=sensorServoWork, args=(GuestBathSensorPin, 1, BalconStr))
 
+two_sendSensorData = threading.Thread(target=sendDataToDatabase, args=(BalconSensorPin, BalconStr))
 
 
 
@@ -333,15 +405,17 @@ if __name__ == '__main__':
                         password='7369c86979b2cbf92b10879ec08ba1ca99394ea761c0462a4baf24d3a2225685', host='ec2-176-34-168-83.eu-west-1.compute.amazonaws.com')
     with conn.cursor() as cursor:
         conn.autocommit = True
-        insert = sql.SQL("DELETE FROM home WHERE date < CURRENT_TIMESTAMP - INTERVAL '2day'")
+        insert = sql.SQL("DELETE FROM home WHERE date < CURRENT_TIMESTAMP - INTERVAL '3day'")
         cursor.execute(insert)
-        
+
     one.start()
     oneFanLight.start()
     oneLight.start()
+    one_sendSensorData.start()
+    twoServo.start()
+    #two_sendSensorData.start()
 
-    
-    SendDataToDB.start()
+    #SendDataToDB.start()
     ErrorHandler.start()
     #tempInside.start()
     #FanMainWork.start()
