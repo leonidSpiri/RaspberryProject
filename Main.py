@@ -33,7 +33,6 @@ config = {
 }
 
 
-#git commit test
 
 url = "http://www.google.com"
 urlTimeout = 5
