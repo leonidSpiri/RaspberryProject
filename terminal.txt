@@ -2,4 +2,4 @@ sudo apt-get install idle3
 sudo pip3 install Adafruit_DHT
 pip3 install adafruit-circuitpython-dht
 python3 -m pip install psycopg2-binary 
-
+test
