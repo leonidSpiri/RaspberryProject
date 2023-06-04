@@ -1,8 +1,5 @@
-apt update
-apt upgrade
-apt-get update
-apt-get upgrade
-apt install mc
+apt-get update && sudo apt-get upgrade
+apt install -y mc
 apt-get install ssh
 apt-get install git-all
 (git clone; git add .; git commit -m “text”; git push)
