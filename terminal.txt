@@ -22,6 +22,12 @@ pip install pyrebase4
 pip3 install adafruit-circuitpython-servokit
 
 
+apt install -y docker
+apt install -y docker-compose
+sudo usermod -a -G docker [user]
+docker build -t "blinker:v1" .
+docker container run --device /dev/gpiomem -d blinker:v1
+
 
 
 
