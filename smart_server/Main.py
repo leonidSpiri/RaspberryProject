@@ -2,6 +2,7 @@ import requests
 import time
 import RPi.GPIO as GPIO
 import glob
+import threading
 
 base_url = "http://192.168.1.122:9888/api/"
 base_dir = '/sys/bus/w1/devices/'
@@ -75,13 +76,28 @@ def send_data_to_server():
 
 
 def main():
-    print("Hello World!")
+    print("Main")
     while True:
         retrieve_data_from_server()
         time.sleep(10)
         send_data_to_server()
-        time.sleep(30)
+        time.sleep(60)
 
+
+def security():
+    print("Security")
+    while True:
+        retrieve_data_from_server()
+        if read_motion():
+            url = base_url + "security/violated"
+            requests.post(url)
+            time.sleep(30)
+        else:
+            time.sleep(10)
+
+
+mainWork = threading.Thread(target=main)
+securityWork = threading.Thread(target=security)
 
 if __name__ == '__main__':
     GPIO.cleanup()
@@ -91,4 +107,5 @@ if __name__ == '__main__':
     GPIO.setup(cond_pin, GPIO.OUT)
     GPIO.output(cond_pin, GPIO.LOW)
     GPIO.setup(motion_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-    main()
+    mainWork.start()
+    securityWork.start()
